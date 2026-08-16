@@ -2027,6 +2027,12 @@ window.__LOGO__={l:"iVBORw0KGgoAAAANSUhEUgAAAMwAAABeCAYAAABvjPu6AAAACXBIWXMAACE3
     saveFail: ['تعذّر الحفظ — المساحة ممتلئة في المتصفح', 'Save failed — browser storage is full'],
     /* التخزين المشترك (Supabase) */
     saveCloud: ['تم الحفظ في مساحة العمل المشتركة · النسخة {v}', 'Saved to the shared workspace · version {v}'],
+    warnSheet: ['\u26A0 هذا شيت مختلف عن الشيت الذي يعمل عليه الفريق.',
+      '\u26A0 This is a different sheet from the one the team is working on.'],
+    warnDrop: ['\u26A0 هذا التحديث سيُنزل عدد المرشحين من {p} إلى {n}.',
+      '\u26A0 This refresh would drop the candidates from {p} to {n}.'],
+    warnGo: ['هل تريد المتابعة واستبدال البيانات الحالية؟', 'Continue and replace the current data?'],
+    warnStop: ['أُلغي التحديث — لم تتغيّر البيانات', 'Refresh cancelled — nothing changed'],
     saveConflict: ['تم تحديث البيانات بواسطة مستخدم آخر. يرجى تحميل آخر نسخة قبل الحفظ.',
       'The workspace was updated by another user. Reload the latest version before saving.'],
     saveOffline: ['تعذر الوصول إلى التخزين المشترك. لم يتم حفظ التغييرات على الخادم.',
@@ -2222,6 +2228,7 @@ window.__LOGO__={l:"iVBORw0KGgoAAAANSUhEUgAAAMwAAABeCAYAAABvjPu6AAAACXBIWXMAACE3
   var SAVING = false;     /* حفظ جارٍ على الخادم */
   var NEWER = null;       /* نسخة أحدث على الخادم — تُعرض في شريط، لا تُطبَّق تلقائيًا */
   var OVERRIDES_H = null; /* حالات واردة من التخزين المشترك، مبصومة، بانتظار السجلات */
+  var TEAM_FP = '';       /* بصمة الشيت الذي يعمل عليه الفريق — تمنع السحب من شيت خاطئ */
 
   var STATUSES = ['جديد', 'تم الفرز', 'مقابلة HR', 'مقابلة فنية', 'عرض وظيفي', 'مقبول', 'مرفوض'];
   var ST_EN = { 'جديد': 'New', 'تم الفرز': 'Screened', 'مقابلة HR': 'HR interview', 'مقابلة فنية': 'Technical interview', 'عرض وظيفي': 'Offer', 'مقبول': 'Hired', 'مرفوض': 'Rejected' };
@@ -3208,15 +3215,22 @@ window.__LOGO__={l:"iVBORw0KGgoAAAANSUhEUgAAAMwAAABeCAYAAABvjPu6AAAACXBIWXMAACE3
     return ('00000000' + h1.toString(16)).slice(-8) + ('00000000' + (h2 >>> 0).toString(16)).slice(-8);
   }
   function hashOv(ov) { var o = {}; for (var k in ov) o[hk(k)] = ov[k]; return o; }
+  /* الحالات المبصومة = المطابقة حاليًا + المعلّقة التي لم يظهر أصحابها بعد */
+  function mergeOv() {
+    var o = hashOv(OVERRIDES);
+    for (var k in (OVERRIDES_H || {})) if (!(k in o)) o[k] = OVERRIDES_H[k];
+    return o;
+  }
   /* حلّ البصمات إلى مفاتيح حقيقية بعد توفّر السجلات */
   function resolveOv() {
     if (!OVERRIDES_H || !DATA.length) return;
-    var n = 0;
     for (var i = 0; i < DATA.length; i++) {
-      var v = OVERRIDES_H[hk(DATA[i].key)];
-      if (v) { OVERRIDES[DATA[i].key] = v; n++; }
+      var h = hk(DATA[i].key), v = OVERRIDES_H[h];
+      if (v) { OVERRIDES[DATA[i].key] = v; delete OVERRIDES_H[h]; }
     }
-    if (n || DATA.length) OVERRIDES_H = null;
+    /* ما لم يطابق يبقى معلّقًا — قد يعود صاحبه في التحديث القادم، فلا نُسقطه */
+    for (var k in OVERRIDES_H) return;
+    OVERRIDES_H = null;
   }
   function prep(records, report, at, src) {
     for (var i = 0; i < records.length; i++) {
@@ -3434,7 +3448,7 @@ window.__LOGO__={l:"iVBORw0KGgoAAAANSUhEUgAAAMwAAABeCAYAAABvjPu6AAAACXBIWXMAACE3
     if (SAVING) return Promise.resolve(false);
     var ws = {
       v: APP_VERSION, at: Date.now(), records: DATA, report: META.report,
-      overrides: hashOv(OVERRIDES), ovh: 1,
+      overrides: mergeOv(), ovh: 1, sheetFp: hk(GSheet.sheetIdOf(SHEET_URL)),
       filters: F, view: VIEW, eng: ENG, sheet: SHEET_URL,
       lastRun: LAST_RUN, lastSync: LAST_SYNC ? LAST_SYNC.getTime() : null,
       log: LOG
@@ -3445,6 +3459,7 @@ window.__LOGO__={l:"iVBORw0KGgoAAAANSUhEUgAAAMwAAABeCAYAAABvjPu6AAAACXBIWXMAACE3
     return Store.saveWorkspace(ws, opts).then(function (res) {
       /* لا نعرض رسالة النجاح إلا بعد تأكيد الكتابة على الخادم */
       done();
+      TEAM_FP = ws.sheetFp || TEAM_FP;   /* هذا الشيت صار شيت الفريق المعتمد */
       WS_AT = new Date(ws.at); setDirty(false);
       NEWER = null; paintCloudBar();
       var b = $('#saveBtn'); b.classList.add('ok');
@@ -3558,6 +3573,21 @@ window.__LOGO__={l:"iVBORw0KGgoAAAANSUhEUgAAAMwAAABeCAYAAABvjPu6AAAACXBIWXMAACE3
         stepRow(1, T('st4'), T('st4d', { n: nf(rep.kept), p: nPos, c: nf(rep.certLabels || 0) }));
       paint(log);
       var prev = LOG.length ? LOG[0] : null;
+
+      /* ===== حاجز أمان قبل استبدال البيانات =====
+         سببه واقعة حقيقية: لصق رابط شيت قديم استبدل 11,031 مرشحًا بـ67 بصمت.
+         نعترض على حالتين: شيت غير شيت الفريق، أو انهيار مفاجئ في العدد. */
+      var warn = [];
+      var fp = hk(GSheet.sheetIdOf(url));
+      if (TEAM_FP && fp !== TEAM_FP) warn.push(T('warnSheet'));
+      if (prev && prev.total >= 200 && res.records.length < prev.total * 0.6)
+        warn.push(T('warnDrop', { p: nf(prev.total), n: nf(res.records.length) }));
+      if (warn.length && !window.confirm(warn.join('\n\n') + '\n\n' + T('warnGo'))) {
+        paint(log + stepRow(2, T('warnStop'), ''));
+        setSyncing(false); toast(T('warnStop'));
+        return;                                  /* البيانات الحالية كما هي */
+      }
+
       var snap = snapshotOf(res.records, rep);
       /* طلبات جديدة فعليًا = تواريخها أحدث من آخر لقطة */
       snap.fresh = prev ? res.records.filter(function (r) { return r.t * DAY > prev.maxT * DAY; }).length : 0;
@@ -3805,6 +3835,7 @@ window.__LOGO__={l:"iVBORw0KGgoAAAANSUhEUgAAAMwAAABeCAYAAABvjPu6AAAACXBIWXMAACE3
            ''        إذا كانت فارغة */
   function applyShared(ws, live) {
     if (!ws) return '';
+    TEAM_FP = ws.sheetFp || '';
     if (ws.ovh) { OVERRIDES = {}; OVERRIDES_H = ws.overrides || {}; }
     else { OVERRIDES = ws.overrides || {}; OVERRIDES_H = null; }
     if (ws.filters) { var d = { q: '', pos: '', nat: '', exp: '', res: '', sal: '', st: '', per: '', fam: '' };
